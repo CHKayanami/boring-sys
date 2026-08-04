@@ -1,0 +1,195 @@
+From: honk project
+Subject: [PATCH] Add client X25519 private key preset and ClientHello fixup
+ hooks
+
+Two generic client-side hooks needed by protocols that must derive the
+ClientHello session_id from the X25519 ephemeral key agreement (e.g.
+REALITY's session_id authentication):
+
+1. SSL_set1_client_x25519_private_key: preset the client ephemeral X25519
+   private key used in the initial ClientHello key_share, so the caller can
+   compute X25519(client_ephemeral, server_pubkey) before the ClientHello
+   is sent.
+
+2. SSL_set_client_hello_fixup_cb: a callback invoked after the ClientHello
+   has been fully serialized (PSK binder included) but before it is hashed
+   into the handshake transcript and sent, allowing in-place modification
+   (e.g. rewriting legacy_session_id) with transcript consistency kept
+   automatically.
+diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
+index 0730e76..e902af6 100644
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -2667,6 +2667,21 @@ OPENSSL_EXPORT int SSL_set1_client_key_shares(SSL *ssl,
+                                               const uint16_t *group_ids,
+                                               size_t num_group_ids);
+ 
++// SSL_set1_client_x25519_private_key configures |ssl| to use |private_key|
++// (32 bytes) as the client ephemeral X25519 key in the initial ClientHello
++// key_share, instead of generating a random one. It returns one on success.
++OPENSSL_EXPORT int SSL_set1_client_x25519_private_key(
++    SSL *ssl, const uint8_t *private_key);
++
++// SSL_client_hello_fixup_cb is called after the ClientHello has been fully
++// serialized but before it is hashed into the handshake transcript and sent.
++// |msg| points to the complete handshake message (4-byte header included) and
++// may be modified in place. It must return one on success; on zero the
++// handshake fails with an internal error.
++typedef int (*SSL_client_hello_fixup_cb)(SSL *ssl, uint8_t *msg, size_t msg_len);
++OPENSSL_EXPORT void SSL_set_client_hello_fixup_cb(SSL *ssl,
++                                                  SSL_client_hello_fixup_cb cb);
++
+ // SSL_set1_server_supported_groups_hint, when |ssl| is a client, indicates that
+ // the server is likely to support groups listed in |server_groups|, in order of
+ // decreasing server preference. This function returns one on success and zero
+diff --git a/ssl/extensions.cc b/ssl/extensions.cc
+index e0514fe..01d6114 100644
+--- a/ssl/extensions.cc
++++ b/ssl/extensions.cc
+@@ -2279,7 +2279,14 @@ bool ssl_setup_key_shares(SSL_HANDSHAKE *hs, uint16_t override_group_id) {
+ 
+   CBB key_exchange;
+   for (const uint16_t group_id : *selected_key_shares) {
+-    UniquePtr<SSLKeyShare> key_share = SSLKeyShare::Create(group_id);
++    UniquePtr<SSLKeyShare> key_share;
++    if (group_id == SSL_GROUP_X25519 &&
++        !ssl->config->client_x25519_private_key.empty()) {
++      key_share = CreateX25519KeyShareWithKey(
++          ssl->config->client_x25519_private_key);
++    } else {
++      key_share = SSLKeyShare::Create(group_id);
++    }
+     if (key_share == nullptr ||                                    //
+         !CBB_add_u16(cbb.get(), group_id) ||                       //
+         !CBB_add_u16_length_prefixed(cbb.get(), &key_exchange) ||  //
+diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
+index c96dedc..8734ea2 100644
+--- a/ssl/handshake_client.cc
++++ b/ssl/handshake_client.cc
+@@ -245,6 +245,12 @@ bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
+     }
+   }
+ 
++  if (ssl->config->client_hello_fixup_cb != nullptr &&
++      !ssl->config->client_hello_fixup_cb(ssl, msg.data(), msg.size())) {
++    OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
++    return false;
++  }
++
+   return ssl->method->add_message(ssl, std::move(msg));
+ }
+ 
+diff --git a/ssl/internal.h b/ssl/internal.h
+index 1f5ce51..075b3cb 100644
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -945,6 +945,12 @@ class SSLKeyShare {
+   virtual bool DeserializePrivateKey(CBS *in) { return false; }
+ };
+ 
++// CreateX25519KeyShareWithKey returns an X25519 SSLKeyShare that uses
++// |private_key| (32 bytes) as the client ephemeral private key instead of
++// generating a random one, or nullptr on error.
++UniquePtr<SSLKeyShare> CreateX25519KeyShareWithKey(
++    Span<const uint8_t> private_key);
++
+ struct NamedGroup {
+   int nid;
+   uint16_t group_id;
+@@ -3301,6 +3307,18 @@ struct SSL_CONFIG {
+   std::optional<InplaceVector<uint16_t, kNumNamedGroups>>
+       client_key_share_selections;
+ 
++  // For a client, if non-empty, this is the 32-byte X25519 private key to use
++  // as the client ephemeral key in the initial ClientHello key_share
++  // extension, instead of generating a random one. See
++  // |SSL_set1_client_x25519_private_key|.
++  Array<uint8_t> client_x25519_private_key;
++
++  // For a client, if non-null, this is called after the ClientHello has been
++  // fully serialized but before it is hashed into the handshake transcript
++  // and sent. See |SSL_set_client_hello_fixup_cb|.
++  int (*client_hello_fixup_cb)(SSL *ssl, uint8_t *msg,
++                               size_t msg_len) = nullptr;
++
+   // For a client, this contains a list of groups believed to be supported by
+   // the server, in server preference order.
+   Array<uint16_t> server_supported_groups_hint;
+diff --git a/ssl/ssl_key_share.cc b/ssl/ssl_key_share.cc
+index 4fb0890..cad31a9 100644
+--- a/ssl/ssl_key_share.cc
++++ b/ssl/ssl_key_share.cc
+@@ -141,11 +141,22 @@ class X25519KeyShare : public SSLKeyShare {
+  public:
+   X25519KeyShare() {}
+ 
++  explicit X25519KeyShare(Span<const uint8_t> private_key)
++      : has_preset_key_(true) {
++    OPENSSL_memcpy(private_key_, private_key.data(), sizeof(private_key_));
++  }
++
+   uint16_t GroupID() const override { return SSL_GROUP_X25519; }
+ 
+   bool Generate(CBB *out) override {
+     uint8_t public_key[32];
+-    X25519_keypair(public_key, private_key_);
++    // X25519_keypair generates a fresh random private key; a preset key must
++    // only derive its public half.
++    if (has_preset_key_) {
++      X25519_public_from_private(public_key, private_key_);
++    } else {
++      X25519_keypair(public_key, private_key_);
++    }
+     return !!CBB_add_bytes(out, public_key, sizeof(public_key));
+   }
+ 
+@@ -191,6 +202,7 @@ class X25519KeyShare : public SSLKeyShare {
+ 
+  private:
+   uint8_t private_key_[32];
++  bool has_preset_key_ = false;
+ };
+ 
+ class P256Kyber768Draft00KeyShare : public SSLKeyShare {
+@@ -592,6 +604,14 @@ UniquePtr<SSLKeyShare> SSLKeyShare::Create(uint16_t group_id) {
+   }
+ }
+ 
++UniquePtr<SSLKeyShare> CreateX25519KeyShareWithKey(
++    Span<const uint8_t> private_key) {
++  if (private_key.size() != 32) {
++    return nullptr;
++  }
++  return MakeUnique<X25519KeyShare>(private_key);
++}
++
+ bool ssl_nid_to_group_id(uint16_t *out_group_id, int nid) {
+   for (const auto &group : kNamedGroups) {
+     if (group.nid == nid) {
+diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
+index fe5bb9b..616b979 100644
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -2034,6 +2034,22 @@ int SSL_set1_client_key_shares(SSL *ssl, const uint16_t *group_ids,
+   return 1;
+ }
+ 
++int SSL_set1_client_x25519_private_key(SSL *ssl,
++                                       const uint8_t *private_key) {
++  if (!ssl->config || private_key == nullptr) {
++    return 0;
++  }
++  return ssl->config->client_x25519_private_key.CopyFrom(
++      Span(private_key, 32));
++}
++
++void SSL_set_client_hello_fixup_cb(SSL *ssl, SSL_client_hello_fixup_cb cb) {
++  if (!ssl->config) {
++    return;
++  }
++  ssl->config->client_hello_fixup_cb = cb;
++}
++
+ int SSL_set1_server_supported_groups_hint(SSL *ssl,
+                                           const uint16_t *server_groups,
+                                           size_t num_server_groups) {
