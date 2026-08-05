@@ -15,7 +15,12 @@ REALITY's session_id authentication):
    has been fully serialized (PSK binder included) but before it is hashed
    into the handshake transcript and sent, allowing in-place modification
    (e.g. rewriting legacy_session_id) with transcript consistency kept
-   automatically.
+   automatically. After a successful callback, hs->session_id is synced
+   from the (possibly rewritten) legacy_session_id field, so the TLS 1.3
+   session-id echo check compares the ServerHello echo against the bytes
+   actually sent on the wire. Note a fixup that rewrites the session_id
+   invalidates any PSK binder; REALITY forbids resumption, so this never
+   coexists with a binder in practice.
 diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
 index 0730e76..e902af6 100644
 --- a/include/openssl/ssl.h
@@ -66,14 +71,28 @@ diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
 index c96dedc..8734ea2 100644
 --- a/ssl/handshake_client.cc
 +++ b/ssl/handshake_client.cc
-@@ -245,6 +245,12 @@ bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
+@@ -245,6 +245,26 @@ bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
      }
    }
  
-+  if (ssl->config->client_hello_fixup_cb != nullptr &&
-+      !ssl->config->client_hello_fixup_cb(ssl, msg.data(), msg.size())) {
-+    OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
-+    return false;
++  if (ssl->config->client_hello_fixup_cb != nullptr) {
++    if (!ssl->config->client_hello_fixup_cb(ssl, msg.data(), msg.size())) {
++      OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
++      return false;
++    }
++    // A fixup that rewrites legacy_session_id must be mirrored into
++    // |hs->session_id|: the TLS 1.3 session-id echo check (and TLS 1.2
++    // resumption detection) compares the ServerHello echo against
++    // |hs->session_id|, not against the bytes on the wire.
++    const size_t session_id_len_off = 4 + 2 + SSL3_RANDOM_SIZE;
++    if (msg.size() > session_id_len_off) {
++      const uint8_t session_id_len = msg[session_id_len_off];
++      if (msg.size() >= session_id_len_off + 1 + session_id_len &&
++          session_id_len <= SSL_MAX_SSL_SESSION_ID_LENGTH) {
++        hs->session_id.CopyFrom(
++            Span(msg).subspan(session_id_len_off + 1, session_id_len));
++      }
++    }
 +  }
 +
    return ssl->method->add_message(ssl, std::move(msg));
