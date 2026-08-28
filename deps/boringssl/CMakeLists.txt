@@ -120,6 +120,9 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CLANG)
   # Note clang-cl is odd and sets both CLANG and MSVC. We base our configuration
   # primarily on our normal Clang one.
   set(C_CXX_FLAGS "-Werror -Wformat=2 -Wmissing-field-initializers -Wshadow -Wsign-compare -Wtype-limits -Wvla -Wwrite-strings -fno-strict-aliasing")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|i[3-6]86" OR CMAKE_C_COMPILER_TARGET MATCHES "i[3-6]86" OR CMAKE_C_FLAGS MATCHES "i686|m32" OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4))
+    set(C_CXX_FLAGS "${C_CXX_FLAGS} -msse2")
+  endif()
   if(MSVC)
     # clang-cl sets different default warnings than clang. It also treats -Wall
     # as -Weverything, to match MSVC. Instead -W3 is the alias for -Wall.

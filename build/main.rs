@@ -316,6 +316,8 @@ fn get_boringssl_cmake_config(config: &Config) -> cmake::Config {
 
         "linux" => match &*config.target_arch {
             "x86" => {
+                boringssl_cmake.cflag("-msse2");
+                boringssl_cmake.cxxflag("-msse2");
                 boringssl_cmake.define(
                     "CMAKE_TOOLCHAIN_FILE",
                     // `src_path` can be a path relative to the manifest dir, but
@@ -742,10 +744,12 @@ fn generate_bindings(config: &Config) -> Result<PathBuf, Box<dyn std::error::Err
         .generate_comments(true)
         .fit_macro_constants(false)
         .size_t_is_usize(true)
-        .layout_tests(config.env.debug.is_some())
+        .layout_tests(false)
         .merge_extern_blocks(true)
         .prepend_enum_name(true)
         .blocklist_type("max_align_t") // Not supported by bindgen on all targets, not used by BoringSSL
+        .blocklist_type("time_t")
+        .raw_line("pub use libc::time_t;")
         .clang_args(get_extra_clang_args_for_bindgen(config))
         .clang_arg("-I")
         .clang_arg(include_path.display().to_string());

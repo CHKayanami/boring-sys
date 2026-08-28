@@ -90,6 +90,9 @@ underscore-wildcards = []
 name = "boring_sys"
 path = "src/lib.rs"
 
+[dependencies]
+libc = "0.2"
+
 [build-dependencies.bindgen]
 version = "0.72.0"
 features = ["runtime"]

@@ -43,6 +43,7 @@ dependencies = [
  "cmake",
  "fs_extra",
  "fslock",
+ "libc",
 ]
 
 [[package]]
