@@ -246,6 +246,12 @@ fn get_boringssl_cmake_config(config: &Config) -> cmake::Config {
         }
     }
 
+    if config.target_os == "linux" {
+        boringssl_cmake.define("CMAKE_THREAD_LIBS_INIT", "-lpthread");
+        boringssl_cmake.define("CMAKE_HAVE_THREADS_LIBRARY", "1");
+        boringssl_cmake.define("CMAKE_USE_PTHREADS_INIT", "1");
+    }
+
     if let Some(sysroot) = &config.env.sysroot {
         boringssl_cmake.define("CMAKE_SYSROOT", sysroot);
     }

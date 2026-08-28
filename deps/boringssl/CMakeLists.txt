@@ -120,7 +120,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CLANG)
   # Note clang-cl is odd and sets both CLANG and MSVC. We base our configuration
   # primarily on our normal Clang one.
   set(C_CXX_FLAGS "-Werror -Wformat=2 -Wmissing-field-initializers -Wshadow -Wsign-compare -Wtype-limits -Wvla -Wwrite-strings -fno-strict-aliasing")
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|i[3-6]86" OR CMAKE_C_COMPILER_TARGET MATCHES "i[3-6]86" OR CMAKE_C_FLAGS MATCHES "i686|m32" OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4))
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|i[3-6]86" OR CMAKE_C_COMPILER_TARGET MATCHES "i[3-6]86" OR CMAKE_C_FLAGS MATCHES "i686")
     set(C_CXX_FLAGS "${C_CXX_FLAGS} -msse2")
   endif()
   if(MSVC)
@@ -635,8 +635,12 @@ endif()
 # package does not work with Android, but Android does not require any extra
 # parameters to link pthreads.
 if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Generic|Android)$")
-  find_package(Threads REQUIRED)
-  target_link_libraries(crypto Threads::Threads)
+  find_package(Threads)
+  if(TARGET Threads::Threads)
+    target_link_libraries(crypto Threads::Threads)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT WIN32)
+    target_link_libraries(crypto pthread)
+  endif()
 endif()
 
 # Every target depends on crypto, so we add libcxx as a dependency here to
