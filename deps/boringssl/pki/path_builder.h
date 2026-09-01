@@ -80,7 +80,13 @@ struct OPENSSL_EXPORT CertPathBuilderResultPath {
   // For result paths where |IsValid()|, the final certificate is trusted.
   // However for failed or partially constructed paths the final certificate may
   // not be a trust anchor.
+  //
+  // This field is deprecated, use |trust_anchor.CertTrust()| instead.
   CertificateTrust last_cert_trust;
+
+  // Contains information about the trust anchor of the certificate chain,
+  // including whether or not it is trusted.
+  TrustAnchor trust_anchor;
 
   // The set of policies that the certificate is valid for (of the
   // subset of policies user requested during verification).
@@ -133,6 +139,11 @@ class OPENSSL_EXPORT CertPathBuilderDelegate
 //
 // WARNING: This implementation is currently experimental.  Consult an OWNER
 // before using it.
+//
+// When used to verify a Merkle Tree Certificate
+// (draft-davidben-tls-merkle-tree-certs-08), this does not perform the
+// revocation check of section 7.2 step 3. The caller is responsible for
+// checking whether an MTC's serial number is in a revoked range.
 class OPENSSL_EXPORT CertPathBuilder {
  public:
   // Provides the overall result of path building. This includes the paths that
@@ -223,7 +234,7 @@ class OPENSSL_EXPORT CertPathBuilder {
 
   // Sets a limit to the number of times to repeat the process of considering a
   // new intermediate over all potential paths. Setting |limit| to 0 disables
-  // the iteration limit, which is the default.
+  // the iteration limit.
   void SetIterationLimit(uint32_t limit);
 
   // Sets a limit to the number of certificates to be added in a path from leaf
@@ -262,7 +273,7 @@ class OPENSSL_EXPORT CertPathBuilder {
   const std::set<der::Input> user_initial_policy_set_;
   const InitialPolicyMappingInhibit initial_policy_mapping_inhibit_;
   const InitialAnyPolicyInhibit initial_any_policy_inhibit_;
-  uint32_t max_iteration_count_ = 0;
+  uint32_t max_iteration_count_ = 20;
   uint32_t max_path_building_depth_ = 0;
   size_t valid_path_limit_ = 1;
   size_t valid_path_count_ = 0;

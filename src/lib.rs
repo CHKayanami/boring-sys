@@ -33,7 +33,7 @@ pub use generated::{FIPS_mode, SSL_CTX_set_compliance_policy}; // your include p
 #[cfg(feature = "mlkem")]
 pub use generated::{MLKEM768_encap, MLKEM768_private_key_from_seed}; // your include path is incorrect or has a version of boringssl without mlkem support
 #[cfg(feature = "rpk")]
-pub use generated::{SSL_CREDENTIAL_new_raw_public_key, SSL_CREDENTIAL_set1_spki}; // your include path is incorrect or has a version of boringssl without rpk support
+pub use generated::{SSL_CREDENTIAL_new_raw_public_key_empty, SSL_CREDENTIAL_set1_spki}; // your include path is incorrect or has a version of boringssl without rpk support
 
 pub use generated::*;
 
@@ -65,6 +65,15 @@ pub const fn ERR_GET_REASON(l: c_uint) -> c_int {
 pub fn init() {
     unsafe {
         CRYPTO_library_init();
+    }
+}
+
+// CBS_init is inline in BoringSSL, so bindgen can't generate bindings for it.
+#[inline]
+pub fn cbs_init(data: &[u8]) -> CBS {
+    CBS {
+        data: data.as_ptr(),
+        len: data.len(),
     }
 }
 
