@@ -71,8 +71,8 @@ diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
 index c96dedc..8734ea2 100644
 --- a/ssl/handshake_client.cc
 +++ b/ssl/handshake_client.cc
-@@ -245,6 +245,26 @@ bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
-     }
+@@ -234,6 +234,26 @@ bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
+     return false;
    }
  
 +  if (ssl->config->client_hello_fixup_cb != nullptr) {
