@@ -271,6 +271,12 @@ fn get_boringssl_cmake_config(config: &Config) -> cmake::Config {
         }
     }
 
+    if config.target_os == "linux" {
+        boringssl_cmake.define("CMAKE_THREAD_LIBS_INIT", "-lpthread");
+        boringssl_cmake.define("CMAKE_HAVE_THREADS_LIBRARY", "1");
+        boringssl_cmake.define("CMAKE_USE_PTHREADS_INIT", "1");
+    }
+
     if let Some(sysroot) = &config.env.sysroot {
         boringssl_cmake.define("CMAKE_SYSROOT", sysroot);
     }
@@ -350,6 +356,8 @@ fn get_boringssl_cmake_config(config: &Config) -> cmake::Config {
 
         "linux" => match &*config.target_arch {
             "x86" => {
+                boringssl_cmake.cflag("-msse2");
+                boringssl_cmake.cxxflag("-msse2");
                 boringssl_cmake.define(
                     "CMAKE_TOOLCHAIN_FILE",
                     // `src_path` can be a path relative to the manifest dir, but
@@ -725,7 +733,9 @@ fn emit_link_directives(config: &Config) {
             .map(|s| dir.join(s))
             .filter(|d| d.exists())
             .unwrap_or(dir);
-        println!("cargo:rustc-link-search=native={}", dir.display());
+        if dir.is_dir() {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+        }
     }
 
     if let Some(cpp_lib) = get_cpp_runtime_lib(config) {
@@ -791,13 +801,21 @@ fn generate_bindings(config: &Config) -> Result<PathBuf, Box<dyn std::error::Err
         .generate_comments(true)
         .fit_macro_constants(false)
         .size_t_is_usize(true)
-        .layout_tests(config.env.debug.is_some())
+        .layout_tests(false)
         .merge_extern_blocks(true)
         .prepend_enum_name(true)
         .blocklist_type("max_align_t") // Not supported by bindgen on all targets, not used by BoringSSL
         .clang_args(get_extra_clang_args_for_bindgen(config))
         .clang_arg("-I")
         .clang_arg(include_path.display().to_string());
+
+    // musl 1.2 uses 64-bit time_t on 32-bit targets, while older libc
+    // crates expose c_long. Use the actual target headers for its ABI.
+    if config.target_env != "musl" {
+        builder = builder
+            .blocklist_type("time_t")
+            .raw_line("pub use libc::time_t;");
+    }
 
     if let Some(sysroot) = &config.env.sysroot {
         builder = builder

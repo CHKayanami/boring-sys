@@ -99,6 +99,9 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Set some project-wide compiler flags.
 if(CMAKE_COMPILER_IS_GNUCXX OR CLANG)
   set(C_CXX_FLAGS "-fno-strict-aliasing")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|i[3-6]86" OR CMAKE_C_COMPILER_TARGET MATCHES "i[3-6]86" OR CMAKE_C_FLAGS MATCHES "i686")
+    set(C_CXX_FLAGS "${C_CXX_FLAGS} -msse2")
+  endif()
   if(NOT MSVC)
     if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
       # emscripten's emcc/clang does not accept the "-ggdb" flag.
@@ -673,8 +676,12 @@ endif()
 # package does not work with Android, but Android does not require any extra
 # parameters to link pthreads.
 if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Generic|Android)$")
-  find_package(Threads REQUIRED)
-  target_link_libraries(crypto Threads::Threads)
+  find_package(Threads)
+  if(TARGET Threads::Threads)
+    target_link_libraries(crypto Threads::Threads)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT WIN32)
+    target_link_libraries(crypto pthread)
+  endif()
 endif()
 
 add_library(ssl ${SSL_SOURCES})

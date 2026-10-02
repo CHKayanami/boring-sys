@@ -47,6 +47,7 @@ include = [
     "/deps/boringssl/LICENSE",
     "/build/*",
     "/src",
+    "/tests",
     "/patches",
 ]
 autolib = false
@@ -94,6 +95,9 @@ underscore-wildcards = []
 name = "boring_sys"
 path = "src/lib.rs"
 
+[dependencies]
+libc = "0.2"
+
 [build-dependencies.bindgen]
 version = "0.72.0"
 features = ["runtime"]
@@ -112,3 +116,7 @@ version = "0.2"
 level = "allow"
 priority = 0
 check-cfg = ["cfg(const_fn)"]
+
+[[test]]
+name = "time_t_abi"
+path = "tests/time_t_abi.rs"
